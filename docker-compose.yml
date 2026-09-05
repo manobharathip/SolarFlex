@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: solarflex-mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - solarflex_net
+
+  backend:
+    build: ./backend
+    container_name: solarflex-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - DATABASE_URL=postgresql://solarflex:solarflex@db/solarflex
+    depends_on:
+      - mosquitto
+      - db
+    networks:
+      - solarflex_net
+
+  db:
+    image: postgres:15
+    container_name: solarflex-db
+    environment:
+      - POSTGRES_USER=solarflex
+      - POSTGRES_PASSWORD=solarflex
+      - POSTGRES_DB=solarflex
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - solarflex_net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: solarflex-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=solarflex
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - solarflex_net
+
+volumes:
+  mosquitto_data:
+  postgres_data:
+  grafana_data:
+
+networks:
+  solarflex_net:
+    driver: bridge

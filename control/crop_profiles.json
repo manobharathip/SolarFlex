@@ -1,0 +1,110 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-09-04",
+  "crop_profiles": {
+    "tomato": {
+      "name": "Tomato",
+      "scientific_name": "Solanum lycopersicum",
+      "target_temperature_c": {
+        "min": 8.0,
+        "optimal": 10.0,
+        "max": 12.0
+      },
+      "target_humidity_percent": {
+        "min": 80.0,
+        "optimal": 85.0,
+        "max": 90.0
+      },
+      "optimal_storage_hours": 168,
+      "chilling_injury_temp_c": 7.0,
+      "ethylene_sensitivity": "high",
+      "respiration_rate": "medium",
+      "notes": "Store mature-green to partially ripe. Avoid temperatures below 7°C to prevent chilling injury."
+    },
+    "cabbage": {
+      "name": "Cabbage",
+      "scientific_name": "Brassica oleracea",
+      "target_temperature_c": {
+        "min": 0.0,
+        "optimal": 0.0,
+        "max": 2.0
+      },
+      "target_humidity_percent": {
+        "min": 95.0,
+        "optimal": 98.0,
+        "max": 100.0
+      },
+      "optimal_storage_hours": 4320,
+      "chilling_injury_temp_c": -0.5,
+      "ethylene_sensitivity": "low",
+      "respiration_rate": "low",
+      "notes": "Long storage life at 0°C. Very high humidity prevents wilting. Remove outer leaves before storage."
+    },
+    "beans": {
+      "name": "French Beans",
+      "scientific_name": "Phaseolus vulgaris",
+      "target_temperature_c": {
+        "min": 4.0,
+        "optimal": 5.0,
+        "max": 7.0
+      },
+      "target_humidity_percent": {
+        "min": 90.0,
+        "optimal": 95.0,
+        "max": 100.0
+      },
+      "optimal_storage_hours": 336,
+      "chilling_injury_temp_c": 3.5,
+      "ethylene_sensitivity": "medium",
+      "respiration_rate": "high",
+      "notes": "Highly perishable. Rapid cooling essential. Chilling injury below 3.5°C after few days."
+    },
+    "leafy_greens": {
+      "name": "Leafy Greens",
+      "scientific_name": "Various (Spinach, Lettuce, Amaranthus)",
+      "target_temperature_c": {
+        "min": 0.0,
+        "optimal": 1.0,
+        "max": 2.0
+      },
+      "target_humidity_percent": {
+        "min": 95.0,
+        "optimal": 98.0,
+        "max": 100.0
+      },
+      "optimal_storage_hours": 336,
+      "chilling_injury_temp_c": -0.5,
+      "ethylene_sensitivity": "medium",
+      "respiration_rate": "high",
+      "notes": "Very high respiration rate. Pre-cooling essential. Wilts quickly if humidity drops."
+    },
+    "chilli": {
+      "name": "Chilli",
+      "scientific_name": "Capsicum annuum",
+      "target_temperature_c": {
+        "min": 7.0,
+        "optimal": 9.0,
+        "max": 10.0
+      },
+      "target_humidity_percent": {
+        "min": 90.0,
+        "optimal": 95.0,
+        "max": 98.0
+      },
+      "optimal_storage_hours": 504,
+      "chilling_injury_temp_c": 7.0,
+      "ethylene_sensitivity": "low",
+      "respiration_rate": "medium",
+      "notes": "Chilling injury below 7°C. Surface shriveling main issue. Maintain high humidity."
+    }
+  },
+  "module_defaults": {
+    "priority_weight_temperature": 0.4,
+    "priority_weight_humidity": 0.2,
+    "priority_weight_energy": 0.3,
+    "priority_weight_crop_value": 0.1,
+    "min_cooling_duration_minutes": 15,
+    "max_cooling_duration_minutes": 120,
+    "compressor_hysteresis_c": 1.0
+  }
+}

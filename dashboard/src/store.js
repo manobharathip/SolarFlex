@@ -3,6 +3,34 @@ import { create } from 'zustand';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+// Alert thresholds from system design
+export const ALERT_THRESHOLDS = {
+  battery: {
+    warning: 30,    // 30% SoC - warning
+    critical: 20,  // 20% SoC - critical
+    deepDischarge: 15 // 15% SoC - deep discharge
+  },
+  solar: {
+    lowOutput: 50,      // 50W - low generation warning
+    highTemp: 65,       // 65°C - panel overheating
+    criticalTemp: 80   // 80°C - critical temp
+  },
+  temperature: {
+    warning: 2.0,   // 2°C above target
+    critical: 5.0   // 5°C above target
+  },
+  humidity: {
+    low: 60,        // Below 60%
+    high: 90        // Above 90%
+  },
+  door: {
+    prolongedOpen: 300 // 5 minutes
+  },
+  communication: {
+    timeout: 60     // 60 seconds
+  }
+};
+
 // Mock real-time data for demonstration
 const generateMockData = () => ({
   system: {
@@ -79,12 +107,10 @@ const generateMockData = () => ({
     battery: { soc: '76 %', voltage: '25.1 V', status: 'DISCHARGING', health: 'GOOD' },
     consumption: { cooling: '128 W', fans: '9 W', electronics: '5 W', total: '142 W' }
   },
-  alerts: [
-    { id: 1, timestamp: '09:42:18', module: 'M1', event: 'Cooling priority increased', reason: 'Temperature deviation detected', severity: 'INFO' },
-    { id: 2, timestamp: '09:38:45', module: 'System', event: 'Solar generation optimal', reason: 'Clear sky conditions', severity: 'INFO' },
-    { id: 3, timestamp: '09:15:22', module: 'M2', event: 'Humidity slightly below target', reason: 'Door opened briefly', severity: 'WARNING' },
-    { id: 4, timestamp: '08:55:10', module: 'System', event: 'Battery discharge cycle', reason: 'Nighttime operation', severity: 'INFO' }
-  ],
+  // Additional sensor data for the alert engine
+  solarPanelTemp: 42,          // °C - panel surface temperature (thermal sensor)
+  cameraDustDetected: false,   // Camera ML detection flag
+  communicationOk: true,       // MQTT link health
   temperatureHistory: [
     { time: '08:00', M1: 21.2, M2: 19.1, M3: 18.3, target: 18.0 },
     { time: '09:00', M1: 20.8, M2: 18.8, M3: 18.0, target: 18.0 },
@@ -130,6 +156,9 @@ export const useStore = create((set, get) => ({
   theme: 'light',
   activePage: 'overview',
   data: generateMockData(),
+  alerts: [],                       // computed from data by recomputeAlerts
+  ackMap: {},                       // { [alertId]: true } - survive refreshes
+  dismissMap: {},                   // { [alertId]: true }
   loading: false,
   error: null,
   usingApi: false,
@@ -139,6 +168,35 @@ export const useStore = create((set, get) => ({
   })),
 
   setActivePage: (page) => set({ activePage: page }),
+
+  // Recompute alerts from current data, preserving acknowledge/dismiss state
+  recomputeAlerts: () => {
+    const { data, ackMap, dismissMap } = get();
+    const raw = generateAlertsFromData(data);
+    const alerts = raw
+      .filter(a => !dismissMap[a.id] && (aLive(a, data)))
+      .map(a => ({ ...a, acknowledged: !!ackMap[a.id] }));
+    set({ alerts });
+  },
+
+  // Acknowledge an alert (visible, marked acknowledged)
+  acknowledgeAlert: (id) => {
+    const ackMap = { ...get().ackMap, [id]: true };
+    set({ ackMap, alerts: get().alerts.map(a => a.id === id ? { ...a, acknowledged: true } : a) });
+  },
+
+  // Dismiss an alert entirely (hidden until condition recurs)
+  dismissAlert: (id) => {
+    set({
+      dismissMap: { ...get().dismissMap, [id]: true },
+      alerts: get().alerts.filter(a => a.id !== id)
+    });
+  },
+
+  // Clear all acknowledged alerts
+  clearAcknowledged: () => {
+    set({ alerts: get().alerts.filter(a => !a.acknowledged) });
+  },
 
   // Fetch data from API
   fetchFromApi: async () => {
@@ -217,3 +275,294 @@ if (typeof window !== 'undefined') {
     useStore.getState().fetchFromApi();
   }, 1000);
 }
+
+// ============= ALERT ENGINE =============
+// Evaluates live sensor data against thresholds and produces alerts.
+// Alert IDs are stable (type + module) so acknowledge/dismiss state
+// survives data refreshes.
+
+const alertMeta = {
+  battery_low: {
+    label: 'Low Battery SoC',
+    severity: 'WARNING',
+    description: 'Battery state of charge below safe threshold',
+    recommendation: 'Reduce cooling load or connect external power'
+  },
+  battery_critical: {
+    label: 'Battery Critical',
+    severity: 'CRITICAL',
+    description: 'Battery at minimum reserve needed to protect cells',
+    recommendation: 'Stop non-essential loads immediately'
+  },
+  dust_on_panel: {
+    label: 'Dust on Solar Panel',
+    severity: 'WARNING',
+    source: 'camera',
+    description: 'Camera detected dust accumulation reducing output',
+    recommendation: 'Schedule panel cleaning to restore efficiency'
+  },
+  solar_panel_high_temp: {
+    label: 'Solar Panel Overheating',
+    severity: 'WARNING',
+    description: 'Panel temperature above safe operating range',
+    recommendation: 'Improve ventilation or reduce output draw'
+  },
+  solar_low_generation: {
+    label: 'Low Solar Generation',
+    severity: 'WARNING',
+    description: 'Solar output below expected level',
+    recommendation: 'Check for dust, shading, or panel fault'
+  },
+  solar_zero_output: {
+    label: 'Zero Solar Output',
+    severity: 'CRITICAL',
+    description: 'No generation detected during daylight hours',
+    recommendation: 'Check panel connections and MPPT controller'
+  },
+  temperature_high: {
+    label: 'Temperature Above Target',
+    severity: 'WARNING',
+    description: 'Module temperature exceeds target by significant margin',
+    recommendation: 'Increase cooling allocation'
+  },
+  temperature_critical: {
+    label: 'Critical Temperature',
+    severity: 'CRITICAL',
+    description: 'Module temperature dangerous for stored produce',
+    recommendation: 'Immediate cooling required'
+  },
+  humidity_high: {
+    label: 'Humidity Above Target',
+    severity: 'WARNING',
+    description: 'Humidity exceeds safe storage range',
+    recommendation: 'Enable dehumidification'
+  },
+  humidity_low: {
+    label: 'Humidity Below Target',
+    severity: 'WARNING',
+    description: 'Humidity below safe storage range',
+    recommendation: 'Reduce ventilation'
+  },
+  door_open: {
+    label: 'Door Open',
+    severity: 'INFO',
+    description: 'Module door is open',
+    recommendation: 'Close door to maintain temperature'
+  },
+  door_prolonged_open: {
+    label: 'Door Open Prolonged',
+    severity: 'WARNING',
+    description: 'Door open for extended period',
+    recommendation: 'Close door immediately'
+  },
+  communication_fault: {
+    label: 'Communication Lost',
+    severity: 'CRITICAL',
+    description: 'Module not responding over MQTT',
+    recommendation: 'Check module power and network link'
+  }
+};
+
+export const generateAlertsFromData = (data) => {
+  const alerts = [];
+  const now = new Date();
+  const timestamp = now.toTimeString().slice(0, 8);
+  const date = now.toISOString().slice(0, 10);
+
+  const createAlert = (type, module, message, reason, currentValue = null) => {
+    const meta = alertMeta[type] || { label: type, severity: 'INFO', description: '', recommendation: '' };
+    return {
+      id: `${type}__${module}`,           // stable across refresh
+      timestamp,
+      date,
+      module,
+      type,
+      label: meta.label,
+      description: meta.description,
+      recommendation: meta.recommendation,
+      source: meta.source,
+      message,
+      reason,
+      currentValue,
+      severity: meta.severity,
+      acknowledged: false
+    };
+  };
+
+  // Per-module checks
+  (data.modules || []).forEach(module => {
+    const tempDiff = parseFloat(module.temperature) - parseFloat(module.targetTemperature);
+    const humidity = parseFloat(module.humidity);
+
+    // --- Battery SoC ---
+    const moduleSoc = parseFloat(module.batterySoc ?? data.energy?.battery?.value ?? 75);
+    if (moduleSoc <= ALERT_THRESHOLDS.battery.critical) {
+      alerts.push(createAlert(
+        'battery_low', module.id,
+        `Battery SoC ${moduleSoc}%`,
+        `Battery below critical threshold of ${ALERT_THRESHOLDS.battery.critical}%. Cooling may stop.`,
+        `${moduleSoc.toFixed(0)}%`
+      ));
+    } else if (moduleSoc <= ALERT_THRESHOLDS.battery.warning) {
+      alerts.push(createAlert(
+        'battery_low', module.id,
+        `Battery SoC ${moduleSoc}%`,
+        `Battery below warning threshold of ${ALERT_THRESHOLDS.battery.warning}%. Conserve energy.`,
+        `${moduleSoc.toFixed(0)}%`
+      ));
+    }
+
+    // --- Temperature deviation ---
+    if (tempDiff >= ALERT_THRESHOLDS.temperature.critical) {
+      alerts.push(createAlert(
+        'temperature_critical', module.id,
+        `Cabin temp ${module.temperature}°C vs target ${module.targetTemperature}°C`,
+        `Deviation +${tempDiff.toFixed(1)}°C exceeds critical limit of ${ALERT_THRESHOLDS.temperature.critical}°C.`,
+        `+${tempDiff.toFixed(1)}°C`
+      ));
+    } else if (tempDiff >= ALERT_THRESHOLDS.temperature.warning) {
+      alerts.push(createAlert(
+        'temperature_high', module.id,
+        `Cabin temp ${module.temperature}°C vs target ${module.targetTemperature}°C`,
+        `Deviation +${tempDiff.toFixed(1)}°C exceeds warning limit of ${ALERT_THRESHOLDS.temperature.warning}°C.`,
+        `+${tempDiff.toFixed(1)}°C`
+      ));
+    }
+
+    // --- Humidity ---
+    if (humidity >= ALERT_THRESHOLDS.humidity.high) {
+      alerts.push(createAlert(
+        'humidity_high', module.id,
+        `Humidity ${humidity}%`,
+        `At or above ceiling of ${ALERT_THRESHOLDS.humidity.high}%.`,
+        `${humidity}%`
+      ));
+    } else if (humidity <= ALERT_THRESHOLDS.humidity.low) {
+      alerts.push(createAlert(
+        'humidity_low', module.id,
+        `Humidity ${humidity}%`,
+        `At or below floor of ${ALERT_THRESHOLDS.humidity.low}%.`,
+        `${humidity}%`
+      ));
+    }
+
+    // --- Door status ---
+    if (module.door === 'Open') {
+      alerts.push(createAlert(
+        'door_open', module.id,
+        'Door open',
+        'Door sensor reports open. Temperature risk if prolonged.',
+        'Open'
+      ));
+    }
+  });
+
+  // --- System-level solar checks ---
+  const solarPower = parseFloat(data.energy?.solar?.value) || 0;
+  const panelTemp = data.solarPanelTemp;
+
+  if (solarPower === 0 && isDaytime()) {
+    alerts.push(createAlert(
+      'solar_zero_output', 'System',
+      'Solar output 0W',
+      'No generation expected during daylight. Possible disconnect, shading or controller fault.',
+      '0 W'
+    ));
+  } else if (solarPower > 0 && solarPower < ALERT_THRESHOLDS.solar.lowOutput && isDaytime()) {
+    alerts.push(createAlert(
+      'solar_low_generation', 'System',
+      `Solar output ${solarPower.toFixed(0)}W`,
+      `Below ${ALERT_THRESHOLDS.solar.lowOutput}W during daylight. Possible dust or partial shading.`,
+      `${solarPower.toFixed(0)} W`
+    ));
+  }
+
+  // --- Panel high temperature (thermal sensor) ---
+  if (panelTemp && panelTemp >= ALERT_THRESHOLDS.solar.highTemp) {
+    const sev = panelTemp >= ALERT_THRESHOLDS.solar.criticalTemp ? 'CRITICAL' : 'WARNING';
+    alerts.push(createAlert(
+      'solar_panel_high_temp', 'System',
+      `Panel temp ${panelTemp}°C`,
+      `Above operating ceiling of ${ALERT_THRESHOLDS.solar.highTemp}°C${sev === 'CRITICAL' ? ' (critical thermal risk)' : ''}.`,
+      `${panelTemp}°C`
+    ));
+  }
+
+  // --- Camera dust detection ---
+  if (data.cameraDustDetected) {
+    alerts.push(createAlert(
+      'dust_on_panel', 'System',
+      'Dust detected on panel',
+      'Camera ML model flagged dust accumulation, explaining reduced output.',
+      'Detected'
+    ));
+  }
+
+  // --- Communication health ---
+  if (data.communicationOk === false) {
+    alerts.push(createAlert(
+      'communication_fault', 'System',
+      'MQTT link down',
+      'No heartbeats received from modules. Data may be stale.',
+      'Offline'
+    ));
+  }
+
+  // Sort by severity then label
+  const severityOrder = { CRITICAL: 0, WARNING: 1, INFO: 2 };
+  return alerts.sort((a, b) => {
+    const s = severityOrder[a.severity] - severityOrder[b.severity];
+    return s !== 0 ? s : a.label.localeCompare(b.label);
+  });
+};
+
+// Check if it's daytime (6 AM - 6 PM)
+const isDaytime = () => {
+  const hour = new Date().getHours();
+  return hour >= 6 && hour <= 18;
+};
+
+// A computed alert points at the data path that produced it. Returns true if the
+// underlying condition still holds, so alerts clear automatically when data recovers.
+const aLive = (alert, data) => {
+  if (alert.module === 'System') {
+    switch (alert.type) {
+      case 'solar_zero_output':
+      case 'solar_low_generation': {
+        const p = parseFloat(data.energy?.solar?.value) || 0;
+        return isDaytime() && p === 0;
+      }
+      case 'solar_panel_high_temp':
+        return data.solarPanelTemp >= ALERT_THRESHOLDS.solar.highTemp;
+      case 'dust_on_panel':
+        return !!data.cameraDustDetected;
+      case 'communication_fault':
+        return data.communicationOk === false;
+      default:
+        return true;
+    }
+  }
+
+  const mod = data.modules?.find(m => m.id === alert.module);
+  if (!mod) return false;
+  const tempDiff = parseFloat(mod.temperature) - parseFloat(mod.targetTemperature);
+  const humidity = parseFloat(mod.humidity);
+  const soc = parseFloat(mod.batterySoc ?? data.energy?.battery?.value ?? 75);
+
+  switch (alert.type) {
+    case 'battery_low':
+      return soc <= ALERT_THRESHOLDS.battery.warning;
+    case 'temperature_critical':
+      return tempDiff >= ALERT_THRESHOLDS.temperature.critical;
+    case 'temperature_high':
+      return tempDiff >= ALERT_THRESHOLDS.temperature.warning;
+    case 'humidity_high':
+      return humidity >= ALERT_THRESHOLDS.humidity.high;
+    case 'humidity_low':
+      return humidity <= ALERT_THRESHOLDS.humidity.low;
+    case 'door_open':
+      return mod.door === 'Open';
+    default:
+      return true;
+  }
+};
